@@ -146,45 +146,6 @@ class GoogleMapsExtractor:
                 
         return results
     
-    def _extract_single_place(self, idx: int, card) -> Optional[Dict[str, Any]]:
-        """Extract data from a single place card"""
-        try:
-            # Scroll card into view and click it
-            self.driver.execute_script("arguments[0].scrollIntoView();", card)
-            time.sleep(1)
-            card.click()
-            time.sleep(self.config.detail_wait_time)
-            
-            # Extract place details
-            place_data = {
-                "name": self._extract_name(),
-                "address": self._extract_address(),
-                "rating": self._extract_rating(),
-                "coordinates": self._extract_coordinates(),
-                "raw_html": self._get_raw_details_html()
-            }
-            
-            logger.info(f"[{idx+1}] {place_data['name']} | {place_data['rating']}")
-            
-            # Try to go back to the list with multiple methods
-            success = self._go_back_to_list()
-            if not success:
-                # If we can't go back, restart the browser and search again
-                logger.warning("Couldn't go back to list. Restarting browser.")
-                self._restart_browser_and_search()
-            
-            return place_data
-        except Exception as e:
-            logger.error(f"Failed to extract place at index {idx}: {e}")
-            # Try to go back to the list or restart browser if necessary
-            try:
-                success = self._go_back_to_list()
-                if not success:
-                    self._restart_browser_and_search()
-            except:
-                self._restart_browser_and_search()
-            return None
-    
     def _go_back_to_list(self) -> bool:
         """Try multiple methods to go back to the results list"""
         back_button_selectors = [
@@ -285,17 +246,159 @@ class GoogleMapsExtractor:
                 
         return "No rating"
     
+   # Perbaikan untuk class GoogleMapsExtractor
+
+    def _extract_single_place(self, idx: int, card) -> Optional[Dict[str, Any]]:
+        """Extract data from a single place card"""
+        try:
+            # Scroll card into view and click it
+            self.driver.execute_script("arguments[0].scrollIntoView();", card)
+            time.sleep(1)
+            card.click()
+            time.sleep(self.config.detail_wait_time)
+            
+            # Extract place details
+            place_data = {
+                "name": self._extract_name(),
+                "address": self._extract_address(),
+                "rating": self._extract_rating(),
+                "coordinates": self._extract_coordinates(),
+                # Hapus raw_html karena menyebabkan error
+                # "raw_html": self._get_raw_details_html()
+            }
+            
+            logger.info(f"[{idx+1}] {place_data['name']} | {place_data['rating']} | {place_data['coordinates']}")
+            
+            # Try to go back to the list with multiple methods
+            success = self._go_back_to_list()
+            if not success:
+                # If we can't go back, restart the browser and search again
+                logger.warning("Couldn't go back to list. Restarting browser.")
+                self._restart_browser_and_search()
+            
+            return place_data
+        except Exception as e:
+            logger.error(f"Failed to extract place at index {idx}: {e}")
+            # Try to go back to the list or restart browser if necessary
+            try:
+                success = self._go_back_to_list()
+                if not success:
+                    self._restart_browser_and_search()
+            except:
+                self._restart_browser_and_search()
+            return None
+
     def _extract_coordinates(self) -> str:
-        """Extract coordinates from the current URL"""
+        """Extract coordinates using multiple methods to ensure accuracy"""
+        # Method 1: Try to extract from URL (current implementation)
         current_url = self.driver.current_url
         coords_match = re.search(r'@(-?\d+\.\d+),(-?\d+\.\d+)', current_url)
         
         if coords_match:
             lat, lng = coords_match.groups()
             return f"{lat},{lng}"
-        else:
-            return "No coordinates"
-    
+        
+        # Method 2: Try to extract from share link (most reliable)
+        try:
+            # Click share button
+            share_button_selectors = [
+                (By.XPATH, "//button[contains(@jsaction, 'share')]"),
+                (By.XPATH, "//button[contains(@aria-label, 'Share')]"),
+                (By.CSS_SELECTOR, "button[jsaction*='share']"),
+                (By.CSS_SELECTOR, "button[aria-label*='Share']"),
+                (By.CSS_SELECTOR, "button[data-value='Share']")
+            ]
+            
+            for by, selector in share_button_selectors:
+                try:
+                    share_button = WebDriverWait(self.driver, 3).until(
+                        EC.element_to_be_clickable((by, selector))
+                    )
+                    share_button.click()
+                    time.sleep(1)
+                    break
+                except:
+                    continue
+            
+            # Get share link
+            share_link_selectors = [
+                (By.CSS_SELECTOR, "input[aria-label*='Share']"),
+                (By.CSS_SELECTOR, "input.Gou1Yb"),
+                (By.XPATH, "//input[contains(@aria-label, 'link')]"),
+                (By.CSS_SELECTOR, "input[readonly]")
+            ]
+            
+            for by, selector in share_link_selectors:
+                try:
+                    share_input = WebDriverWait(self.driver, 3).until(
+                        EC.presence_of_element_located((by, selector))
+                    )
+                    share_url = share_input.get_attribute('value')
+                    
+                    # Extract coordinates from share URL
+                    coords_match = re.search(r'!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)', share_url)
+                    if coords_match:
+                        lat, lng = coords_match.groups()
+                        # Close the share dialog by pressing escape
+                        webdriver.ActionChains(self.driver).send_keys(Keys.ESCAPE).perform()
+                        return f"{lat},{lng}"
+                    
+                    # Alternative pattern in Google Maps URLs
+                    coords_match = re.search(r'@(-?\d+\.\d+),(-?\d+\.\d+)', share_url)
+                    if coords_match:
+                        lat, lng = coords_match.groups()
+                        # Close the share dialog by pressing escape
+                        webdriver.ActionChains(self.driver).send_keys(Keys.ESCAPE).perform()
+                        return f"{lat},{lng}"
+                    
+                    # Close the share dialog by pressing escape
+                    webdriver.ActionChains(self.driver).send_keys(Keys.ESCAPE).perform()
+                except:
+                    continue
+            
+            # Try to close share dialog if open
+            try:
+                webdriver.ActionChains(self.driver).send_keys(Keys.ESCAPE).perform()
+            except:
+                pass
+        except Exception as e:
+            logger.debug(f"Couldn't extract coordinates from share link: {e}")
+        
+        # Method 3: Extract from script tags (more reliable than URL in some cases)
+        try:
+            script_tags = self.driver.find_elements(By.TAG_NAME, "script")
+            for script in script_tags:
+                try:
+                    script_content = script.get_attribute("innerHTML")
+                    # Look for coordinate patterns in script content
+                    coords_match = re.search(r'"latitude":(-?\d+\.\d+),"longitude":(-?\d+\.\d+)', script_content)
+                    if coords_match:
+                        lat, lng = coords_match.groups()
+                        return f"{lat},{lng}"
+                except:
+                    continue
+        except Exception as e:
+            logger.debug(f"Couldn't extract coordinates from script tags: {e}")
+        
+        # If all extraction methods fail, look for meta tags with geo information
+        try:
+            meta_tags = self.driver.find_elements(By.TAG_NAME, "meta")
+            for meta in meta_tags:
+                try:
+                    if meta.get_attribute("property") == "og:latitude":
+                        lat = meta.get_attribute("content")
+                        lng_meta = self.driver.find_element(By.CSS_SELECTOR, "meta[property='og:longitude']")
+                        lng = lng_meta.get_attribute("content")
+                        if lat and lng:
+                            return f"{lat},{lng}"
+                except:
+                    continue
+        except:
+            pass
+        
+        return "No coordinates"
+
+    # Optional: Implementasi fungsi get_raw_details_html jika dibutuhkan
     def _get_raw_details_html(self) -> str:
         """Get raw HTML of the details panel for further processing if needed"""
         try:
@@ -306,7 +409,12 @@ class GoogleMapsExtractor:
                 details_panel = self.driver.find_element(By.CSS_SELECTOR, "div.kAEsAc")
                 return details_panel.get_attribute('innerHTML')
             except:
-                return ""
+                try:
+                    # Mencoba selector lain yang mungkin berisi detail panel
+                    details_panel = self.driver.find_element(By.CSS_SELECTOR, "div[role='main']")
+                    return details_panel.get_attribute('innerHTML')
+                except:
+                    return ""
     
     def close(self) -> None:
         """Close the WebDriver"""
